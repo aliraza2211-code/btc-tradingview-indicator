@@ -1,0 +1,168 @@
+<mxfile host="app.diagrams.net">
+
+<diagram name="DFD Level 0">
+<mxGraphModel>
+<root>
+
+<mxCell id="0"/>
+<mxCell id="1" parent="0"/>
+
+<mxCell id="2" value="Bitcoin Market Intelligence System"
+style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;"
+vertex="1" parent="1">
+<mxGeometry x="400" y="200" width="250" height="80" as="geometry"/>
+</mxCell>
+
+<mxCell id="3" value="Social Media"
+style="rounded=1;fillColor=#fff2cc;"
+vertex="1" parent="1">
+<mxGeometry x="120" y="80" width="140" height="60" as="geometry"/>
+</mxCell>
+
+<mxCell id="4" value="Blockchain API"
+style="rounded=1;fillColor=#f8cecc;"
+vertex="1" parent="1">
+<mxGeometry x="120" y="200" width="140" height="60" as="geometry"/>
+</mxCell>
+
+<mxCell id="5" value="Market Data API"
+style="rounded=1;fillColor=#e1d5e7;"
+vertex="1" parent="1">
+<mxGeometry x="120" y="320" width="140" height="60" as="geometry"/>
+</mxCell>
+
+<mxCell id="6" value="Trader"
+style="rounded=1;fillColor=#d5e8d4;"
+vertex="1" parent="1">
+<mxGeometry x="760" y="200" width="140" height="60" as="geometry"/>
+</mxCell>
+
+<mxCell id="7" value="News Data"
+edge="1" parent="1" source="3" target="2">
+<mxGeometry relative="1" as="geometry"/>
+</mxCell>
+
+<mxCell id="8" value="Whale Data"
+edge="1" parent="1" source="4" target="2">
+<mxGeometry relative="1" as="geometry"/>
+</mxCell>
+
+<mxCell id="9" value="Price Data"
+edge="1" parent="1" source="5" target="2">
+<mxGeometry relative="1" as="geometry"/>
+</mxCell>
+
+<mxCell id="10" value="Trading Signals"
+edge="1" parent="1" source="2" target="6">
+<mxGeometry relative="1" as="geometry"/>
+</mxCell>
+
+</root>
+</mxGraphModel>
+</diagram>
+
+
+<diagram name="DFD Level 1">
+<mxGraphModel>
+<root>
+
+<mxCell id="0"/>
+<mxCell id="1" parent="0"/>
+
+<mxCell id="11" value="1 News Analysis"
+vertex="1" parent="1"
+style="rounded=1;fillColor=#dae8fc;">
+<mxGeometry x="420" y="80" width="200" height="60" as="geometry"/>
+</mxCell>
+
+<mxCell id="12" value="2 Whale Tracking"
+vertex="1" parent="1"
+style="rounded=1;fillColor=#dae8fc;">
+<mxGeometry x="420" y="180" width="200" height="60" as="geometry"/>
+</mxCell>
+
+<mxCell id="13" value="3 Hybrid Indicator"
+vertex="1" parent="1"
+style="rounded=1;fillColor=#dae8fc;">
+<mxGeometry x="420" y="280" width="200" height="60" as="geometry"/>
+</mxCell>
+
+<mxCell id="14" value="Social Media"
+vertex="1" parent="1">
+<mxGeometry x="120" y="80" width="140" height="60" as="geometry"/>
+</mxCell>
+
+<mxCell id="15" value="Blockchain API"
+vertex="1" parent="1">
+<mxGeometry x="120" y="180" width="140" height="60" as="geometry"/>
+</mxCell>
+
+<mxCell id="16" value="Market Data API"
+vertex="1" parent="1">
+<mxGeometry x="120" y="280" width="140" height="60" as="geometry"/>
+</mxCell>
+
+<mxCell id="17" value="Trader"
+vertex="1" parent="1">
+<mxGeometry x="760" y="180" width="140" height="60" as="geometry"/>
+</mxCell>
+
+</root>
+</mxGraphModel>
+</diagram>
+
+
+<diagram name="DFD Level 2">
+<mxGraphModel>
+<root>
+
+<mxCell id="0"/>
+<mxCell id="1" parent="0"/>
+
+<mxCell id="21" value="1.1 Fetch News"
+vertex="1" parent="1"
+style="rounded=1;fillColor=#dae8fc;">
+<mxGeometry x="200" y="60" width="180" height="60" as="geometry"/>
+</mxCell>
+
+<mxCell id="22" value="1.2 Sentiment Analysis"
+vertex="1" parent="1"
+style="rounded=1;fillColor=#dae8fc;">
+<mxGeometry x="420" y="60" width="180" height="60" as="geometry"/>
+</mxCell>
+
+<mxCell id="23" value="2.1 Fetch Transactions"
+vertex="1" parent="1"
+style="rounded=1;fillColor=#dae8fc;">
+<mxGeometry x="200" y="160" width="180" height="60" as="geometry"/>
+</mxCell>
+
+<mxCell id="24" value="2.2 Detect Whale Activity"
+vertex="1" parent="1"
+style="rounded=1;fillColor=#dae8fc;">
+<mxGeometry x="420" y="160" width="180" height="60" as="geometry"/>
+</mxCell>
+
+<mxCell id="25" value="3.1 RSI"
+vertex="1" parent="1"
+style="rounded=1;fillColor=#dae8fc;">
+<mxGeometry x="200" y="260" width="180" height="60" as="geometry"/>
+</mxCell>
+
+<mxCell id="26" value="3.2 EMA"
+vertex="1" parent="1"
+style="rounded=1;fillColor=#dae8fc;">
+<mxGeometry x="420" y="260" width="180" height="60" as="geometry"/>
+</mxCell>
+
+<mxCell id="27" value="3.3 Signal Generator"
+vertex="1" parent="1"
+style="rounded=1;fillColor=#dae8fc;">
+<mxGeometry x="640" y="260" width="180" height="60" as="geometry"/>
+</mxCell>
+
+</root>
+</mxGraphModel>
+</diagram>
+
+</mxfile>

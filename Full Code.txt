@@ -1,0 +1,267 @@
+import discord
+from discord.ext import tasks
+from flask import Flask
+from threading import Thread
+import os
+import json
+import asyncio
+import websockets
+import requests
+from bs4 import BeautifulSoup
+from dotenv import load_dotenv
+from datetime import datetime, timezone
+
+# --------------------------
+# ENV LOAD
+# --------------------------
+load_dotenv()
+
+TOKEN = os.getenv("DISCORD_BOT_TOKEN")
+UPCOMING_CHANNEL_ID = int(os.getenv("UPCOMING_CHANNEL_ID", "0"))
+RELEASED_CHANNEL_ID = int(os.getenv("RELEASED_CHANNEL_ID", "0"))
+NEWS_CHANNEL_ID = int(os.getenv("NEWS_CHANNEL_ID", "0"))
+WHALE_CHANNEL_ID = int(os.getenv("WHALE_CHANNEL_ID", "0"))
+
+SEPARATOR = "─" * 30
+STORIES_FILE = "posted_stories.json"
+WHALE_THRESHOLD = 5_000_000  # USD — alerts for trades $5,000,000 and above
+
+intents = discord.Intents.default()
+client = discord.Client(intents=intents)
+
+print("[DEBUG] TOKEN LOADED:", "YES" if TOKEN else "NO")
+
+# --------------------------
+# FLASK KEEP ALIVE
+# --------------------------
+app = Flask("")
+
+@app.route("/")
+def home():
+    return "Bot is alive!"
+
+def run():
+    app.run(host="0.0.0.0", port=8080)
+
+Thread(target=run).start()
+
+# --------------------------
+# STORAGE
+# --------------------------
+def load_stories():
+    if os.path.exists(STORIES_FILE):
+        return set(json.load(open(STORIES_FILE)))
+    return set()
+
+def save_stories(data):
+    json.dump(list(data), open(STORIES_FILE, "w"))
+
+posted_stories = load_stories()
+posted_upcoming = set()
+posted_released = set()
+
+# --------------------------
+# FOREX FACTORY CALENDAR SCRAPER
+# --------------------------
+def get_forex_news():
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    }
+    news_list = []
+    try:
+        r = requests.get("https://www.forexfactory.com/calendar.php?week=this", headers=headers, timeout=30)
+        soup = BeautifulSoup(r.text, "html.parser")
+
+        current_date = None
+        for row in soup.find_all("tr", class_="calendar__row"):
+            date_el = row.find("td", class_="calendar__date")
+            if date_el and date_el.text.strip():
+                current_date = date_el.text.strip()
+
+            currency = row.find("td", class_="calendar__currency")
+            event = row.find("td", class_="calendar__event")
+            time_el = row.find("td", class_="calendar__time")
+            actual = row.find("td", class_="calendar__actual")
+            forecast = row.find("td", class_="calendar__forecast")
+
+            if not currency or currency.text.strip() != "USD":
+                continue
+
+            news_list.append({
+                "date": current_date,
+                "time": time_el.text.strip() if time_el else "",
+                "event": event.text.strip() if event else "",
+                "actual": actual.text.strip() if actual else None,
+                "forecast": forecast.text.strip() if forecast else None
+            })
+
+        print("[DEBUG] Forex news found:", len(news_list))
+    except Exception as e:
+        print("[ERROR] Forex scraping failed:", e)
+
+    return news_list
+
+# --------------------------
+# FOREX FACTORY STORIES SCRAPER
+# --------------------------
+def get_latest_stories():
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    }
+    stories = []
+    try:
+        r = requests.get("https://www.forexfactory.com/news", headers=headers, timeout=30)
+        soup = BeautifulSoup(r.text, "html.parser")
+
+        for item in soup.find_all("div", class_="news-block__item"):
+            impact_img = item.find("img", class_=lambda c: c and "impact" in c)
+            if not impact_img:
+                continue
+            if "high" not in impact_img.get("src", ""):
+                continue
+
+            title_el = item.find(class_="news-block__title")
+            if not title_el:
+                continue
+            details_el = item.find(class_="news-block__details")
+            details = details_el.get_text(separator=" ", strip=True) if details_el else ""
+            stories.append({"title": title_el.get_text(strip=True), "details": details})
+
+        print("[INFO] High-impact stories found:", len(stories))
+    except Exception as e:
+        print("[ERROR] Stories failed:", e)
+
+    return stories
+
+# --------------------------
+# BINANCE WHALE TRACKER
+# --------------------------
+BINANCE_WS_URL = "wss://stream.binance.com:9443/ws/btcusdt@aggTrade"
+
+async def whale_tracker():
+    await client.wait_until_ready()
+    print("[INFO] Whale tracker started")
+
+    while True:
+        try:
+            async with websockets.connect(BINANCE_WS_URL, ping_interval=20) as ws:
+                print("[INFO] Connected to Binance WebSocket")
+                async for message in ws:
+                    data = json.loads(message)
+
+                    price = float(data["p"])
+                    quantity = float(data["q"])
+                    value = price * quantity
+
+                    if value >= WHALE_THRESHOLD:
+                        is_sell = data["m"]  # buyer is maker = sell order
+                        side = "🔴 SELL" if is_sell else "🟢 BUY"
+                        trade_time = datetime.fromtimestamp(
+                            data["T"] / 1000, tz=timezone.utc
+                        ).strftime("%H:%M:%S UTC")
+
+                        whale_channel = client.get_channel(WHALE_CHANNEL_ID)
+                        if whale_channel:
+                            await whale_channel.send(
+                                f"{SEPARATOR}\n"
+                                f"🐋 **WHALE ALERT — BTC/USDT**\n"
+                                f"{SEPARATOR}\n"
+                                f"{side}\n"
+                                f"💰 **Value:** ${value:,.0f}\n"
+                                f"₿  **BTC Amount:** {quantity:,.4f} BTC\n"
+                                f"📈 **Price:** ${price:,.2f}\n"
+                                f"🕐 **Time:** {trade_time}\n"
+                                f"{SEPARATOR}"
+                            )
+                            print(f"[WHALE] {side} — ${value:,.0f}")
+
+        except Exception as e:
+            print(f"[ERROR] Whale WebSocket error: {e} — reconnecting in 5s...")
+            await asyncio.sleep(5)
+
+# --------------------------
+# DISCORD LOOP
+# --------------------------
+@tasks.loop(minutes=5)
+async def send_news():
+    await client.wait_until_ready()
+
+    print("[INFO] Running news fetch...")
+
+    upcoming = client.get_channel(UPCOMING_CHANNEL_ID)
+    released = client.get_channel(RELEASED_CHANNEL_ID)
+    news_channel = client.get_channel(NEWS_CHANNEL_ID)
+
+    forex = get_forex_news()
+
+    for f in forex:
+        key = f"{f['event']}_{f['date']}_{f['time']}"
+
+        if f["actual"]:
+            if key not in posted_released:
+                posted_released.add(key)
+                if released:
+                    await released.send(
+                        f"{SEPARATOR}\n📢 **Released USD News**\n📌 **{f['event']}**\n"
+                        f"📅 {f['date']}  🕐 {f['time']} (ET)\n"
+                        f"✅ Actual: {f['actual']}  |  🔮 Forecast: {f['forecast']}\n{SEPARATOR}"
+                    )
+        else:
+            if key not in posted_upcoming:
+                posted_upcoming.add(key)
+                if upcoming:
+                    await upcoming.send(
+                        f"{SEPARATOR}\n📅 **Upcoming USD News**\n📌 **{f['event']}**\n"
+                        f"📅 {f['date']}  🕐 {f['time']} (ET)\n{SEPARATOR}"
+                    )
+
+    stories = get_latest_stories()
+
+    for s in stories:
+        if s["title"] not in posted_stories:
+            posted_stories.add(s["title"])
+            save_stories(posted_stories)
+            if news_channel:
+                time_text = f"\n🕐 {s['details']}" if s.get("details") else ""
+                await news_channel.send(
+                    f"{SEPARATOR}\n"
+                    f"🔴 **HIGH IMPACT NEWS ALERT**\n"
+                    f"{SEPARATOR}\n"
+                    f"📌 **{s['title']}**{time_text}\n"
+                    f"{SEPARATOR}"
+                )
+
+# --------------------------
+# ON READY
+# --------------------------
+@client.event
+async def on_ready():
+    global posted_stories
+    print(f"[INFO] Logged in as {client.user}")
+
+    upcoming = client.get_channel(UPCOMING_CHANNEL_ID)
+    released = client.get_channel(RELEASED_CHANNEL_ID)
+    news_ch = client.get_channel(NEWS_CHANNEL_ID)
+
+    for ch in [upcoming, released, news_ch]:
+        if ch:
+            try:
+                await ch.purge(limit=None)
+                print(f"[INFO] Cleared #{ch.name}")
+            except discord.Forbidden:
+                print(f"[WARN] No permission to clear #{ch.name}")
+
+    posted_stories = set()
+    save_stories(posted_stories)
+    print("[INFO] Reset posted stories tracker")
+
+    asyncio.create_task(whale_tracker())
+    send_news.start()
+
+# --------------------------
+# RUN BOT
+# --------------------------
+if not TOKEN:
+    print("[ERROR] Missing token")
+else:
+    client.run(TOKEN)

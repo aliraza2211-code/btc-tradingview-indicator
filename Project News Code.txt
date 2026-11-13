@@ -1,0 +1,282 @@
+import discord
+from discord.ext import tasks
+import requests
+from bs4 import BeautifulSoup
+from flask import Flask
+from threading import Thread
+import os
+import json
+from datetime import datetime
+
+# --------------------------
+# Flask keep_alive server
+# --------------------------
+app = Flask('')
+
+@app.route('/')
+def home():
+    return "Bot is alive!"
+
+def run():
+    app.run(host='0.0.0.0', port=8080)
+
+def keep_alive():
+    t = Thread(target=run)
+    t.start()
+
+keep_alive()
+
+# --------------------------
+# Discord Bot Setup
+# --------------------------
+TOKEN = os.environ.get("DISCORD_BOT_TOKEN")
+UPCOMING_CHANNEL_ID = int(os.environ.get("UPCOMING_CHANNEL_ID", "0"))
+RELEASED_CHANNEL_ID = int(os.environ.get("RELEASED_CHANNEL_ID", "0"))
+NEWS_CHANNEL_ID = int(os.environ.get("NEWS_CHANNEL_ID", "0"))
+
+SEPARATOR = "─" * 30
+STORIES_FILE = "posted_stories.json"
+
+intents = discord.Intents.default()
+client = discord.Client(intents=intents)
+
+# --------------------------
+# Persist posted stories
+# --------------------------
+def load_posted_stories():
+    if os.path.exists(STORIES_FILE):
+        with open(STORIES_FILE, "r") as f:
+            data = json.load(f)
+            return set(data.get("stories", [])), data.get("week", "")
+    return set(), ""
+
+def save_posted_stories(stories_set, week_label):
+    with open(STORIES_FILE, "w") as f:
+        json.dump({"stories": list(stories_set), "week": week_label}, f)
+
+def current_week_label():
+    now = datetime.utcnow()
+    return f"{now.isocalendar()[0]}-W{now.isocalendar()[1]}"
+
+# --------------------------
+# Forex Factory Calendar
+# --------------------------
+FOREX_URL = "https://www.forexfactory.com/calendar.php?week=this"
+
+def get_forex_news():
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    }
+    r = requests.get(FOREX_URL, headers=headers, timeout=30)
+    soup = BeautifulSoup(r.text, "html.parser")
+
+    news_list = []
+    current_date = None
+
+    for row in soup.find_all("tr", class_="calendar__row"):
+        date_header = row.find("td", class_="calendar__date")
+        if date_header and date_header.text.strip():
+            current_date = date_header.text.strip()
+
+        currency = row.find("td", class_="calendar__currency")
+        event = row.find("td", class_="calendar__event")
+        time_cell = row.find("td", class_="calendar__time")
+        impact_cell = row.find("td", class_="calendar__impact")
+        actual = row.find("td", class_="calendar__actual")
+        forecast = row.find("td", class_="calendar__forecast")
+
+        if currency and currency.text.strip() == "USD":
+            impact_level = "Low"
+            if impact_cell:
+                span = impact_cell.find("span", class_=True)
+                if span:
+                    classes = " ".join(span.get("class", []))
+                    if "impact-red" in classes:
+                        impact_level = "High"
+                    elif "impact-ora" in classes:
+                        impact_level = "Medium-High"
+                    elif "impact-yel" in classes:
+                        impact_level = "Medium"
+
+            news_item = {
+                "date": current_date,
+                "time": time_cell.text.strip() if time_cell else "",
+                "currency": currency.text.strip(),
+                "event": event.text.strip() if event else "",
+                "impact": impact_level,
+                "actual": actual.text.strip() if actual else None,
+                "forecast": forecast.text.strip() if forecast else None
+            }
+            news_list.append(news_item)
+    return news_list
+
+# --------------------------
+# Forex Factory Latest News
+# --------------------------
+NEWS_URL = "https://www.forexfactory.com/news"
+
+def get_latest_stories():
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    }
+    r = requests.get(NEWS_URL, headers=headers, timeout=30)
+    soup = BeautifulSoup(r.text, "html.parser")
+
+    stories = []
+
+    for item in soup.find_all("div", class_="news-block__item"):
+        impact_img = item.find("img", class_=lambda c: c and "impact" in c)
+        if not impact_img:
+            continue
+        if "high" not in impact_img.get("src", ""):
+            continue
+
+        title_el = item.find(class_="news-block__title")
+        details_el = item.find(class_="news-block__details")
+
+        if not title_el:
+            continue
+
+        title = title_el.get_text(strip=True)
+        details = details_el.get_text(separator=" ", strip=True) if details_el else ""
+
+        stories.append({"title": title, "details": details})
+
+    return stories
+
+# --------------------------
+# Send news to Discord
+# --------------------------
+posted_upcoming = set()
+posted_released = set()
+posted_stories, saved_week = load_posted_stories()
+
+@tasks.loop(minutes=5)
+async def send_news():
+    global posted_stories, saved_week
+
+    await client.wait_until_ready()
+    print(f"[INFO] Running news fetch...")
+
+    upcoming_channel = client.get_channel(UPCOMING_CHANNEL_ID)
+    released_channel = client.get_channel(RELEASED_CHANNEL_ID)
+    news_channel = client.get_channel(NEWS_CHANNEL_ID)
+
+    # --- Weekly reset for news channel ---
+    week = current_week_label()
+    if week != saved_week:
+        print(f"[INFO] New week detected ({week}), resetting news channel...")
+        posted_stories = set()
+        saved_week = week
+        save_posted_stories(posted_stories, saved_week)
+        if news_channel:
+            try:
+                await news_channel.purge(limit=None)
+                print(f"[INFO] News channel cleared for new week.")
+            except discord.Forbidden:
+                print(f"[WARN] Missing 'Manage Messages' permission in news channel.")
+
+    # --- Calendar events ---
+    news_items = get_forex_news()
+    print(f"[INFO] Total USD calendar events: {len(news_items)}")
+
+    upcoming_sent = 0
+    released_sent = 0
+
+    for news in news_items:
+        key = f"{news['event']}_{news['date']}_{news['time']}"
+
+        if news['actual']:
+            message = (
+                f"{SEPARATOR}\n"
+                f"📰 **Released USD News**\n"
+                f"📌 **Event:** {news['event']}\n"
+                f"📅 **Date:** {news['date']}  🕐 **Time:** {news['time']} (ET)\n"
+                f"⚡ **Impact:** {news['impact']}\n"
+                f"✅ **Actual:** {news['actual']}  |  🔮 **Forecast:** {news['forecast']}\n"
+                f"{SEPARATOR}"
+            )
+            if key not in posted_released:
+                posted_released.add(key)
+                if released_channel:
+                    await released_channel.send(message)
+                    released_sent += 1
+                else:
+                    print(f"[WARN] Released channel not found (ID: {RELEASED_CHANNEL_ID})")
+        else:
+            message = (
+                f"{SEPARATOR}\n"
+                f"📅 **Upcoming USD News**\n"
+                f"📌 **Event:** {news['event']}\n"
+                f"📅 **Date:** {news['date']}  🕐 **Time:** {news['time']} (ET)\n"
+                f"{SEPARATOR}"
+            )
+            if key not in posted_upcoming:
+                posted_upcoming.add(key)
+                if upcoming_channel:
+                    await upcoming_channel.send(message)
+                    upcoming_sent += 1
+                else:
+                    print(f"[WARN] Upcoming channel not found (ID: {UPCOMING_CHANNEL_ID})")
+
+    print(f"[INFO] Calendar done — {upcoming_sent} upcoming, {released_sent} released sent.")
+
+    # --- Red Packet Stories ---
+    stories = get_latest_stories()
+    print(f"[INFO] Red packet stories found: {len(stories)}")
+
+    stories_sent = 0
+    for story in stories:
+        key = story['title']
+        if key not in posted_stories:
+            posted_stories.add(key)
+            save_posted_stories(posted_stories, saved_week)
+            message = (
+                f"{SEPARATOR}\n"
+                f"🔴 **Red Packet News**\n"
+                f"📌 **{story['title']}**\n"
+                f"🕐 {story['details']}\n"
+                f"{SEPARATOR}"
+            )
+            if news_channel:
+                await news_channel.send(message)
+                stories_sent += 1
+            else:
+                print(f"[WARN] News channel not found (ID: {NEWS_CHANNEL_ID})")
+
+    print(f"[INFO] Stories done — {stories_sent} new red packet stories sent.")
+
+# --------------------------
+# Start Bot
+# --------------------------
+@client.event
+async def on_ready():
+    print(f"[INFO] Logged in as {client.user}")
+
+    upcoming_channel = client.get_channel(UPCOMING_CHANNEL_ID)
+    released_channel = client.get_channel(RELEASED_CHANNEL_ID)
+
+    if upcoming_channel:
+        try:
+            await upcoming_channel.purge(limit=None)
+            print(f"[INFO] Cleared upcoming channel.")
+        except discord.Forbidden:
+            print(f"[WARN] Missing 'Manage Messages' permission in upcoming channel.")
+    else:
+        print(f"[WARN] Could not find upcoming channel (ID: {UPCOMING_CHANNEL_ID})")
+
+    if released_channel:
+        try:
+            await released_channel.purge(limit=None)
+            print(f"[INFO] Cleared released channel.")
+        except discord.Forbidden:
+            print(f"[WARN] Missing 'Manage Messages' permission in released channel.")
+    else:
+        print(f"[WARN] Could not find released channel (ID: {RELEASED_CHANNEL_ID})")
+
+    send_news.start()
+
+if not TOKEN:
+    print("[ERROR] DISCORD_BOT_TOKEN is not set. Please add it to your secrets.")
+else:
+    client.run(TOKEN)
